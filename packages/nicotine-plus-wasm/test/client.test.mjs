@@ -396,6 +396,34 @@ test('does not send a folder request when the listing aborts during encoding', a
   assert.equal(peer.queued, 0);
 });
 
+test('rejects an aborted folder listing without waiting for the encoder', { timeout: 5000 }, async (t) => {
+  const controller = new AbortController();
+  const encoding = Promise.withResolvers();
+  const encoder = Promise.withResolvers();
+  const connector = createClientConnector(async () => ({
+    ...protocol,
+    async encodeFolderContentsRequest(...args) {
+      encoding.resolve();
+      await encoder.promise;
+      return protocol.encodeFolderContentsRequest(...args);
+    },
+    terminate() {},
+  }));
+  const { client, server } = await startClient(t, connector);
+  const listing = client.browseFolder('bob', FOLDER, { signal: controller.signal });
+  assert.deepEqual(await server.next(), frame(3, string('bob')));
+  server.send(BOB_ADDRESS);
+  const peer = network.endpoint('5.6.7.8:2234');
+  await peer.next();
+  await encoding.promise;
+  controller.abort(new Error('stop'));
+  await assert.rejects(listing, /stop/);
+  await until(() => peer.socket.closed);
+  encoder.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(peer.queued, 0);
+});
+
 test('rejects a folder listing the peer does not answer', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { client, server } = await startClient(t);

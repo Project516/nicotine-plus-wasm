@@ -615,7 +615,7 @@ function startClient({ protocol, server, relayURL, relayToken, username: self })
       const relay = await Promise.race([joinSession(browse), promise]);
       if (!settled) {
         browse.relay = relay;
-        const frame = await protocol.encodeFolderContentsRequest(nextBrowseToken++, folder);
+        const frame = await Promise.race([protocol.encodeFolderContentsRequest(nextBrowseToken++, folder), promise]);
         if (!settled) {
           try {
             relay.send(frame);
