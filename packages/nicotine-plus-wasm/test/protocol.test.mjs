@@ -8,7 +8,7 @@ import { after, before, test } from 'node:test';
 import { createProtocol } from '@project516/nicotine-plus-wasm';
 import { PYODIDE_VERSION } from '../src/protocol.mjs';
 import {
-  connectToPeer, frame, initFrame, searchResponse, string, uint8, uint32, uint64,
+  connectToPeer, folderContents, frame, initFrame, searchResponse, string, uint8, uint32, uint64,
 } from './frames.mjs';
 
 let protocol;
@@ -79,6 +79,37 @@ test('decodes an indirect connection request and encodes the replies', async () 
     Buffer.from(await protocol.encodePeerInit('alice', 'P')),
     initFrame(1, string('alice'), string('P'), uint32(0)),
   );
+});
+
+test('requests folder contents and decodes only the requested folder', async () => {
+  assert.deepEqual(
+    Buffer.from(await protocol.encodeFolderContentsRequest(7, 'Music\\Album')),
+    frame(36, uint32(7), string('Music\\Album')),
+  );
+  const response = new Uint8Array(folderContents({
+    token: 7,
+    folder: 'Music\\Album',
+    folders: {
+      'Music\\Album': [
+        { path: '02 B.mp3', size: 20, attributes: [[0, 320], [1, 180]] },
+        { path: '01 A.mp3', size: 10 },
+      ],
+      'Music\\Album\\Scans': [{ path: 'cover.jpg', size: 5 }],
+    },
+  }));
+  assert.deepEqual(await protocol.decodeFolderContentsResponse(response, 'bob', ['Music\\Album']), {
+    folder: 'Music\\Album',
+    files: [
+      { path: 'Music\\Album\\01 A.mp3', size: 10 },
+      { path: 'Music\\Album\\02 B.mp3', size: 20, bitrate: 320, duration: 180 },
+    ],
+  });
+  assert.deepEqual(
+    await protocol.decodeFolderContentsResponse(response, 'bob', ['Other']),
+    { folder: 'Music\\Album', files: undefined },
+  );
+  const longFolder = folderContents({ token: 7, folder: 'x'.repeat(5000), folders: {} });
+  await assert.rejects(protocol.decodeFolderContentsResponse(new Uint8Array(longFolder), 'bob', ['x']), /too large/);
 });
 
 test('rejects search responses that decompress past the limits', async () => {

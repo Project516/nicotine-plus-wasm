@@ -49,6 +49,12 @@ export interface Protocol {
   encodePierceFireWall(token: number): Promise<Uint8Array>;
   encodePeerInit(username: string, connType: string): Promise<Uint8Array>;
   decodeFileSearchResponse(frame: Uint8Array, tokens: number[]): Promise<FileSearchResponse>;
+  encodeFolderContentsRequest(token: number, folder: string): Promise<Uint8Array>;
+  /** `files` is undefined when the folder is not in `folders`. */
+  decodeFolderContentsResponse(frame: Uint8Array, username: string, folders: string[]): Promise<{
+    folder: string;
+    files?: { path: string; size: number; bitrate?: number; duration?: number }[];
+  }>;
   encodeQueueUpload(path: string): Promise<Uint8Array>;
   encodePlaceInQueueRequest(path: string): Promise<Uint8Array>;
   decodePlaceInQueueResponse(frame: Uint8Array): Promise<{ path: string; position: number }>;
@@ -109,6 +115,16 @@ export interface Client {
     size?: number;
     onProgress?: (progress: DownloadProgress) => void;
   }): Promise<Blob>;
+  /**
+   * Lists the files directly in one folder of a peer's shares, without subfolders.
+   * `folder` is a search result path without the file name. Rejects with a
+   * DownloadError when the peer is offline, unreachable, or does not answer in
+   * `timeout` ms (default 30000).
+   */
+  browseFolder(username: string, folder: string, options?: {
+    signal?: AbortSignal;
+    timeout?: number;
+  }): Promise<SearchFile[]>;
   close(): void;
   /** Settles when the server connection drops or `close()` is called. */
   readonly closed: Promise<Error>;

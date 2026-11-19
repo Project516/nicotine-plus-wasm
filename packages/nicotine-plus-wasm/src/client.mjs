@@ -13,6 +13,7 @@ const PEER_CODE = {
   placeInQueueResponse: 44,
   uploadFailed: 46,
   uploadDenied: 50,
+  folderContentsResponse: 37,
 };
 const UPLOAD = 1;
 
@@ -21,6 +22,7 @@ const SLOT_WAIT = 8000;
 const SESSION_SLOT_WAIT = 30000;
 const RESULT_IDLE = 10000;
 const SESSION_IDLE = 60000;
+const BROWSE_TIMEOUT = 30000;
 const FILE_IDLE = 60000;
 // How long a peer that dropped our connection has to answer a queued download
 const ANSWER_TIMEOUT = 60000;
@@ -119,6 +121,8 @@ export function createClientConnector(createProtocol) {
 
 function startClient({ protocol, server, relayURL, relayToken, username: self }) {
   const searches = new Map();
+  // Folder listings in progress, keyed by user and folder
+  const browses = new Map();
   const downloads = new Set();
   const transfers = new Map();
   const sessions = new Map();
@@ -130,6 +134,7 @@ function startClient({ protocol, server, relayURL, relayToken, username: self })
   const closed = Promise.withResolvers();
   let failure;
   let nextSearchToken = Math.floor(Math.random() * 1e6);
+  let nextBrowseToken = Math.floor(Math.random() * 1e6);
 
   const ping = setInterval(() => {
     try {
@@ -145,6 +150,7 @@ function startClient({ protocol, server, relayURL, relayToken, username: self })
     clearInterval(ping);
     closed.resolve(error);
     for (const search of searches.values()) search.fail(error);
+    for (const browse of [...browses.values()]) browse.fail(error);
     for (const download of [...downloads]) download.fail(error);
     for (const waiter of addressWaiters) waiter.reject(error);
     for (const peer of [...peers]) peer.close();
@@ -276,6 +282,9 @@ function startClient({ protocol, server, relayURL, relayToken, username: self })
       case PEER_CODE.fileSearchResponse:
         if (searches.size) await handleSearchResponse(frame, username);
         return true;
+      case PEER_CODE.folderContentsResponse:
+        await handleFolderContents(frame, username);
+        return true;
       case PEER_CODE.transferRequest:
         await handleTransferRequest(frame, username, relay);
         break;
@@ -315,6 +324,13 @@ function startClient({ protocol, server, relayURL, relayToken, username: self })
     } catch (error) {
       search.fail(error);
     }
+  }
+
+  async function handleFolderContents(frame, username) {
+    const folders = [...browses.values()].filter((browse) => browse.username === username).map((browse) => browse.folder);
+    if (!folders.length) return;
+    const { folder, files } = await protocol.decodeFolderContentsResponse(frame, username, folders);
+    if (files) browses.get(transferKey(username, folder))?.finish(files.map(searchFile));
   }
 
   async function handleTransferRequest(frame, username, relay) {
@@ -440,15 +456,15 @@ function startClient({ protocol, server, relayURL, relayToken, username: self })
     } catch (error) {
       throw new DownloadError(`Could not connect to the peer: ${error.message}`);
     }
-    if (!session.downloads.size) {
+    if (!session.members.size) {
       peer.close();
-      throw new DownloadError('The download was cancelled');
+      throw new DownloadError('The request was cancelled');
     }
     session.peer = peer;
     peer.relay.send(await protocol.encodePeerInit(self, 'P'));
     servePeer(peer.relay, username, SESSION_IDLE, false).finally(() => {
       peer.close();
-      for (const download of session.downloads) {
+      for (const download of session.members) {
         if (download.confirmed || download.answerTimer) continue;
         download.answerTimer = setTimeout(() => {
           if (!download.confirmed) {
@@ -461,27 +477,28 @@ function startClient({ protocol, server, relayURL, relayToken, username: self })
     return peer.relay;
   }
 
-  function joinSession(download) {
-    const { username } = download;
+  // One peer connection per user, shared by downloads and folder listings
+  function joinSession(member) {
+    const { username } = member;
     let session = sessions.get(username);
     if (!session) {
-      session = { downloads: new Set() };
+      session = { members: new Set() };
       sessions.set(username, session);
       session.ready = connectSession(username, session);
       session.ready.catch(() => {
         if (sessions.get(username) === session) sessions.delete(username);
       });
     }
-    session.downloads.add(download);
-    download.session = session;
+    session.members.add(member);
+    member.session = session;
     return session.ready;
   }
 
-  function leaveSession(download) {
-    const { session, username } = download;
+  function leaveSession(member) {
+    const { session, username } = member;
     if (!session) return;
-    session.downloads.delete(download);
-    if (session.downloads.size) return;
+    session.members.delete(member);
+    if (session.members.size) return;
     if (sessions.get(username) === session) sessions.delete(username);
     session.peer?.close();
   }
@@ -560,10 +577,42 @@ function startClient({ protocol, server, relayURL, relayToken, username: self })
     }
   }
 
+  async function browseFolder(username, folder, { signal, timeout = BROWSE_TIMEOUT } = {}) {
+    if (failure) throw failure;
+    signal?.throwIfAborted();
+
+    const key = transferKey(username, folder);
+    if (browses.has(key)) throw new DownloadError('This folder is already being listed');
+    const { promise, resolve, reject } = Promise.withResolvers();
+    promise.catch(() => {}); // A rejection can land before the await below
+    // Has its own timeout, so it needs no answer timer when the session drops
+    const browse = { username, folder, confirmed: true, finish: resolve, fail: reject };
+    browses.set(key, browse);
+    const timer = setTimeout(() => reject(new DownloadError('The peer did not list the folder in time')), timeout);
+    const onAbort = () => reject(signal.reason);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      const relay = await Promise.race([joinSession(browse), promise]);
+      const frame = await protocol.encodeFolderContentsRequest(nextBrowseToken++, folder);
+      try {
+        relay.send(frame);
+      } catch {
+        throw new DownloadError('The peer connection closed before the folder was requested');
+      }
+      return await promise;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      browses.delete(key);
+      leaveSession(browse);
+    }
+  }
+
   serverLoop();
   return {
     search,
     download,
+    browseFolder,
     close: () => shutdown(new Error('The client is closed')),
     closed: closed.promise,
   };

@@ -15,6 +15,8 @@ export const METHODS = {
   encodePierceFireWall: 'encode_pierce_fire_wall',
   encodePeerInit: 'encode_peer_init',
   decodeFileSearchResponse: 'decode_file_search_response',
+  encodeFolderContentsRequest: 'encode_folder_contents_request',
+  decodeFolderContentsResponse: 'decode_folder_contents_response',
   encodeQueueUpload: 'encode_queue_upload',
   encodePlaceInQueueRequest: 'encode_place_in_queue_request',
   decodePlaceInQueueResponse: 'decode_place_in_queue_response',
