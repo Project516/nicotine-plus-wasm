@@ -330,7 +330,19 @@ function startClient({ protocol, server, relayURL, relayToken, username: self })
     const folders = [...browses.values()].filter((browse) => browse.username === username).map((browse) => browse.folder);
     if (!folders.length) return;
     const { folder, files } = await protocol.decodeFolderContentsResponse(frame, username, folders);
-    if (files) browses.get(transferKey(username, folder))?.finish(files.map(searchFile));
+    const browse = browses.get(transferKey(username, folder));
+    if (!browse || !files) return;
+    // Legacy clients read paths as latin-1 and find no folder with a non-ASCII name
+    if (!files.length && !browse.legacy && /[^\x00-\x7f]/.test(folder)) {
+      browse.legacy = true;
+      try {
+        browse.relay.send(await protocol.encodeFolderContentsRequest(nextBrowseToken++, folder, true));
+        return;
+      } catch {
+        // The connection closed, so the empty listing stands
+      }
+    }
+    browse.finish(files.map(searchFile));
   }
 
   async function handleTransferRequest(frame, username, relay) {
@@ -592,10 +604,10 @@ function startClient({ protocol, server, relayURL, relayToken, username: self })
     const onAbort = () => reject(signal.reason);
     signal?.addEventListener('abort', onAbort, { once: true });
     try {
-      const relay = await Promise.race([joinSession(browse), promise]);
-      const frame = await protocol.encodeFolderContentsRequest(nextBrowseToken++, folder);
+      browse.relay = await Promise.race([joinSession(browse), promise]);
+      const frame = await Promise.race([protocol.encodeFolderContentsRequest(nextBrowseToken++, folder), promise]);
       try {
-        relay.send(frame);
+        browse.relay.send(frame);
       } catch {
         throw new DownloadError('The peer connection closed before the folder was requested');
       }

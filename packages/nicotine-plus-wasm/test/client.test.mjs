@@ -356,6 +356,24 @@ test('lists a folder over the connection an active download uses', async (t) => 
   assert.equal(peer.socket.closed, false);
 });
 
+test('retries an empty listing of a non-ASCII folder with a latin-1 request', async (t) => {
+  const { client, server } = await startClient(t);
+  const folder = 'Music\\Björk';
+  const listing = client.browseFolder('bob', folder);
+  assert.deepEqual(await server.next(), frame(3, string('bob')));
+  server.send(BOB_ADDRESS);
+  const peer = network.endpoint('5.6.7.8:2234');
+  await peer.next();
+  const first = await peer.next();
+  assert.equal(first.toString('utf8', 16), folder);
+  peer.send(folderContents({ token: first.readUInt32LE(8), folder, folders: {} }));
+  const legacy = await peer.next();
+  assert.equal(legacy.readUInt32LE(4), 36);
+  assert.deepEqual(legacy.subarray(12), Buffer.concat([uint32(11), Buffer.from(folder, 'latin1')]));
+  peer.send(folderContents({ token: legacy.readUInt32LE(8), folder, folders: { [folder]: [{ path: 'a.mp3', size: 3 }] } }));
+  assert.deepEqual(await listing, [{ path: `${folder}\\a.mp3`, name: 'a.mp3', extension: 'mp3', size: 3 }]);
+});
+
 test('rejects a folder listing the peer does not answer', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { client, server } = await startClient(t);

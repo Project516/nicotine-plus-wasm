@@ -167,8 +167,8 @@ def decode_file_search_response(frame, tokens):
     }
 
 
-def encode_folder_contents_request(token, folder):
-    return _encode(FolderContentsRequest(folder, token), PEER)
+def encode_folder_contents_request(token, folder, legacy=False):
+    return _encode(FolderContentsRequest(folder, token, legacy_client=legacy), PEER)
 
 
 def decode_folder_contents_response(frame, username, folders):

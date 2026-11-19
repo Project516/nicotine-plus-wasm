@@ -49,7 +49,8 @@ export interface Protocol {
   encodePierceFireWall(token: number): Promise<Uint8Array>;
   encodePeerInit(username: string, connType: string): Promise<Uint8Array>;
   decodeFileSearchResponse(frame: Uint8Array, tokens: number[]): Promise<FileSearchResponse>;
-  encodeFolderContentsRequest(token: number, folder: string): Promise<Uint8Array>;
+  /** `legacy` encodes the folder as latin-1, for old clients. */
+  encodeFolderContentsRequest(token: number, folder: string, legacy?: boolean): Promise<Uint8Array>;
   /** `files` is undefined when the folder is not in `folders`. */
   decodeFolderContentsResponse(frame: Uint8Array, username: string, folders: string[]): Promise<{
     folder: string;
