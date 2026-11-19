@@ -48,7 +48,33 @@ export async function checkLogin(relayURL, relayToken, username, password, signa
 }
 ```
 
-The package can send a search request. Processing search results and downloading files still require a client.
+## Search and download
+
+`connectClient` connects to the relay, logs in, and returns a client. It rejects with a `LoginError` (see `error.reason`) or a relay error.
+`search` calls `onResult` for each peer that answers and resolves when the timeout (20 seconds by default) ends.
+`download` resolves with a `Blob`. It rejects with a `DownloadError` when the peer denies or fails the upload, or cannot be reached.
+Both reject with the signal's reason when you abort.
+
+```js
+import { connectClient } from '@project516/nicotine-plus-wasm';
+
+const client = await connectClient({ relayURL, relayToken, username, password });
+const results = [];
+await client.search('artist album', { onResult: (result) => results.push(result) });
+
+const { username: peer, files } = results[0];
+const blob = await client.download(peer, files[0].path, {
+  size: files[0].size,
+  onProgress: (state) => console.log(state),
+});
+client.close();
+```
+
+`client.closed` settles with an `Error` when the server connection drops or after `close()`.
+The browser cannot accept connections, so every connection goes out through the relay.
+Only peers reachable on their listening port can be downloaded from.
+The relay allows 64 connections. Each client uses one for the server and at most 49 for peers.
+
 
 ## Build and test
 

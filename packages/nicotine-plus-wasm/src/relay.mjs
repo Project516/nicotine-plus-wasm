@@ -4,7 +4,7 @@
 const maxBufferedBytes = 4 * 1024 * 1024;
 const maxMessageBytes = 64 * 1024;
 
-export async function connectRelay(url, token, { signal } = {}) {
+export async function connectRelay(url, token, { signal, raw = false } = {}) {
   if (typeof token !== "string" || !token) {
     throw new TypeError("A relay token is required");
   }
@@ -31,6 +31,16 @@ export async function connectRelay(url, token, { signal } = {}) {
     clearTimeout(timer);
     signal?.removeEventListener("abort", abort);
     socket.close();
+  }
+
+  function deliver(frame) {
+    if (reader) {
+      reader.resolve(frame);
+      reader = undefined;
+    } else {
+      packets.push(frame);
+      queuedBytes += frame.length;
+    }
   }
 
   const abort = () => fail(signal.reason);
@@ -60,6 +70,15 @@ export async function connectRelay(url, token, { signal } = {}) {
     }
 
     const chunk = new Uint8Array(data);
+    if (raw) {
+      if (queuedBytes + chunk.length > maxBufferedBytes) {
+        fail(new Error("Receive buffer limit exceeded"));
+        return;
+      }
+      deliver(chunk);
+      return;
+    }
+
     let index = 0;
     while (index < chunk.length) {
       const destination = packet ?? header;
@@ -80,13 +99,7 @@ export async function connectRelay(url, token, { signal } = {}) {
         continue;
       }
 
-      if (reader) {
-        reader.resolve(packet);
-        reader = undefined;
-      } else {
-        packets.push(packet);
-        queuedBytes += packet.length;
-      }
+      deliver(packet);
       packet = undefined;
       offset = 0;
     }

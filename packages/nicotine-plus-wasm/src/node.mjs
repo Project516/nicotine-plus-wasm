@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { loadPyodide } from 'pyodide';
+import { createClientConnector } from './client.mjs';
 import { createEngine } from './engine.mjs';
 import { protocolMethods } from './protocol.mjs';
+
+export { DownloadError, LoginError } from './client.mjs';
 
 export async function createProtocol({ pyodideIndexURL } = {}) {
   let engine = createEngine(await loadPyodide({ indexURL: pyodideIndexURL }));
@@ -18,3 +21,5 @@ export async function createProtocol({ pyodideIndexURL } = {}) {
     },
   };
 }
+
+export const connectClient = createClientConnector(createProtocol);

@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Project516
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import { createClientConnector } from './client.mjs';
 import { protocolMethods, PYODIDE_VERSION } from './protocol.mjs';
 
+export { DownloadError, LoginError } from './client.mjs';
 export { connectRelay, login } from './relay.mjs';
 
 export async function createProtocol({
@@ -55,3 +57,5 @@ export async function createProtocol({
 
   return { ...protocolMethods(request), terminate: () => terminate() };
 }
+
+export const connectClient = createClientConnector(createProtocol);

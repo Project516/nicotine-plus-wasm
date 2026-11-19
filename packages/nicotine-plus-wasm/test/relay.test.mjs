@@ -85,3 +85,21 @@ test('closes the connection when a reply times out', async () => {
   await assert.rejects(relay.receive({ timeout: 5 }), /Timed out waiting for a Soulseek reply/);
   await assert.rejects(relay.receive(), /Timed out waiting for a Soulseek reply/);
 });
+
+test('delivers raw chunks unframed and fails when the receive buffer fills', async () => {
+  const connection = connectRelay('wss://example.test/relay', 'token', { raw: true });
+  const socket = TestSocket.instance;
+  socket.message('ready');
+  const relay = await connection;
+
+  const pending = relay.receive();
+  socket.message(Uint8Array.of(255, 255, 255, 255, 1).buffer);
+  assert.deepEqual(await pending, Uint8Array.of(255, 255, 255, 255, 1));
+  socket.message(Uint8Array.of(2).buffer);
+  socket.message(Uint8Array.of(3, 4).buffer);
+  assert.deepEqual(await relay.receive(), Uint8Array.of(2));
+  assert.deepEqual(await relay.receive(), Uint8Array.of(3, 4));
+
+  socket.message(new ArrayBuffer(4 * 1024 * 1024 + 1));
+  await assert.rejects(relay.receive(), /Receive buffer limit exceeded/);
+});

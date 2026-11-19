@@ -11,7 +11,7 @@ const files = new Map([
   ['/', ['text/html', '<!doctype html><title>Nicotine+ Wasm test</title>']],
 ]);
 for (const [directory, names] of Object.entries({
-  src: ['browser.mjs', 'worker.mjs', 'protocol.mjs', 'engine.mjs', 'relay.mjs'],
+  src: ['browser.mjs', 'worker.mjs', 'protocol.mjs', 'engine.mjs', 'relay.mjs', 'client.mjs'],
   dist: ['python.mjs'],
   'node_modules/pyodide': [
     'pyodide.mjs',
@@ -29,7 +29,7 @@ for (const [directory, names] of Object.entries({
   }
 }
 
-test('the browser worker encodes a search and logs in through the relay', { timeout: 30_000 }, async (t) => {
+async function openPage(t) {
   const server = createServer(async (request, response) => {
     const file = files.get(request.url);
     if (!file) return response.writeHead(404).end();
@@ -65,6 +65,11 @@ test('the browser worker encodes a search and logs in through the relay', { time
     });
   });
   await page.goto(`http://${address}`);
+  return { page, relayURL, loginRequest };
+}
+
+test('the browser worker encodes a search and logs in through the relay', { timeout: 30_000 }, async (t) => {
+  const { page, relayURL, loginRequest } = await openPage(t);
   const result = await page.evaluate(async (url) => {
     const { connectRelay, createProtocol, login } = await import('/src/browser.mjs');
     const protocol = await createProtocol({ pyodideIndexURL: '/node_modules/pyodide/' });
@@ -85,4 +90,25 @@ test('the browser worker encodes a search and logs in through the relay', { time
   assert.equal(frame.readUInt32LE(4), 1);
   assert.equal(frame.readUInt32LE(8), 'test-user'.length);
   assert.equal(frame.toString('utf8', 12, 21), 'test-user');
+});
+
+test('connectClient rejects a failed login with a LoginError', { timeout: 30_000 }, async (t) => {
+  const { page, relayURL } = await openPage(t);
+  const result = await page.evaluate(async (url) => {
+    const { connectClient, LoginError } = await import('/src/browser.mjs');
+    try {
+      await connectClient({
+        relayURL: url,
+        relayToken: 'test-token',
+        username: 'test-user',
+        password: 'test-password',
+        signal: AbortSignal.timeout(10_000),
+        pyodideIndexURL: '/node_modules/pyodide/',
+      });
+    } catch (error) {
+      return { login: error instanceof LoginError, reason: error.reason };
+    }
+    return { login: false };
+  }, relayURL);
+  assert.deepEqual(result, { login: true, reason: 'X' });
 });
