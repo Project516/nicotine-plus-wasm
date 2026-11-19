@@ -1,5 +1,9 @@
 # Authors
 
+## Nicotine+ Wasm
+
+- [Project516](https://github.com/Project516) maintains the Wasm fork.
+
 ## Nicotine+ Team
 
 ### Mat (mathiascode)

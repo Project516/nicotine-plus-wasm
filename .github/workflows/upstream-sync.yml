@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: 2026 Project516
+# SPDX-License-Identifier: AGPL-3.0-only
+
+name: Upstream sync
+on:
+  schedule:
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'Project516/nicotine-plus-wasm' && github.ref == 'refs/heads/master'
+    name: Sync the latest stable release
+    permissions:
+      contents: read
+      issues: write # Report merge conflicts.
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare the release update
+        id: sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/sync-upstream.sh
+      - name: Open the sync pull request
+        if: steps.sync.outputs.branch != ''
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+          BRANCH: ${{ steps.sync.outputs.branch }}
+          TAG: ${{ steps.sync.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo '::error::Set the SYNC_TOKEN Actions secret to open upstream sync pull requests.'
+            exit 1
+          fi
+          gh auth setup-git --hostname github.com
+          if [[ -n $(git ls-remote origin "refs/heads/$BRANCH") ]]; then
+            git fetch --no-tags origin "refs/heads/$BRANCH"
+            if ! git diff --quiet HEAD FETCH_HEAD; then
+              echo "::error::Branch $BRANCH differs from the prepared update. Review or remove it before retrying."
+              exit 1
+            fi
+          else
+            git push origin "HEAD:refs/heads/$BRANCH"
+          fi
+          gh pr create --base master --head "$BRANCH" --title "chore(sync): update Nicotine+ to $TAG" \
+            --body "Updates the fork to [Nicotine+ $TAG](https://github.com/nicotine-plus/nicotine-plus/releases/tag/$TAG)."

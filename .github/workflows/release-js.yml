@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: 2026 Project516
+# SPDX-License-Identifier: AGPL-3.0-only
+
+name: Release npm package
+
+on:
+  push:
+    tags: ['js-v*']
+
+permissions: {}
+
+concurrency:
+  group: release-js
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+    defaults:
+      run:
+        working-directory: packages/nicotine-plus-wasm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '26'
+          package-manager-cache: false
+      - name: Set the package version from the tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! [[ "${TAG}" =~ ^js-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::Tag ${TAG} must match js-vX.Y.Z"
+            exit 1
+          fi
+          npm version "${BASH_REMATCH[1]}" --no-git-tag-version
+      - run: npm ci
+      - run: npm test
+      - run: npm exec -- playwright-core install --with-deps chromium
+      - run: npm run test:browser
+      - name: Publish with npm trusted publishing
+        run: |
+          package_version="$(node -p 'const p = require("./package.json"); p.name + "@" + p.version')"
+          if npm view "${package_version}" version >/dev/null 2>&1; then
+            echo "The version is already on npm."
+          else
+            npm publish --access public --provenance
+          fi
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "${TAG}" >/dev/null 2>&1; then
+            upstream="$(head -n 1 ../../.github/upstream-release)"
+            gh release create "${TAG}" --verify-tag --generate-notes \
+              --title "Nicotine+ Wasm ${TAG#js-v}" \
+              --notes "Based on [Nicotine+ ${upstream}](https://github.com/nicotine-plus/nicotine-plus/releases/tag/${upstream})."
+          fi
