@@ -10,8 +10,12 @@ export interface RelayConnection {
   close(): void;
 }
 
+/**
+ * In `raw` mode `receive` returns the next chunk of bytes instead of a
+ * complete Soulseek frame, for file connections.
+ */
 export function connectRelay(
-  url: string | URL, token: string, options?: { signal?: AbortSignal },
+  url: string | URL, token: string, options?: { signal?: AbortSignal; raw?: boolean },
 ): Promise<RelayConnection>;
 
 export function login(
