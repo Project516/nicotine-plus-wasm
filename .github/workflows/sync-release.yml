@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: 2026 Project516
+# SPDX-License-Identifier: AGPL-3.0-only
+
+name: Release after upstream sync
+on:
+  pull_request:
+    types: [closed]
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-release
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  tag:
+    if: >-
+      github.repository == 'Project516/nicotine-plus-wasm'
+      && github.event.pull_request.merged
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && startsWith(github.event.pull_request.head.ref, 'sync/nicotine-plus-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_REPO: ${{ github.repository }}
+      MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+    steps:
+      - name: Find the next npm version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          refs=$(gh api "repos/$GH_REPO/git/matching-refs/tags/js-v" --paginate \
+            --jq '.[] | "\(.ref) \(.object.sha)"')
+          if grep -q " $MERGE_SHA\$" <<< "$refs"; then
+            echo "The sync commit already has a release tag."
+            exit 0
+          fi
+          latest=$(sed -nE 's#^refs/tags/js-v([0-9]+\.[0-9]+\.[0-9]+) .*#\1#p' <<< "$refs" | sort -V | tail -n1)
+          if [[ -z $latest ]]; then
+            echo '::error::Publish and tag the first npm release before releasing an upstream sync.'
+            exit 1
+          fi
+          IFS=. read -r major minor _ <<< "$latest"
+          echo "tag=js-v$major.$((minor + 1)).0" >> "$GITHUB_OUTPUT"
+      - name: Tag the merged release
+        if: steps.version.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo '::error::Set the SYNC_TOKEN Actions secret to trigger npm releases.'
+            exit 1
+          fi
+          gh api "repos/$GH_REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$MERGE_SHA" --silent

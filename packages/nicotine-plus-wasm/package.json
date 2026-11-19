@@ -1,0 +1,50 @@
+{
+  "name": "@project516/nicotine-plus-wasm",
+  "version": "0.0.0",
+  "description": "Nicotine+ Soulseek protocol codecs for browsers and Node.js",
+  "license": "AGPL-3.0-only AND GPL-3.0-or-later",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Project516/nicotine-plus-wasm.git",
+    "directory": "packages/nicotine-plus-wasm"
+  },
+  "exports": {
+    ".": {
+      "browser": {
+        "types": "./src/browser.d.ts",
+        "default": "./src/browser.mjs"
+      },
+      "node": {
+        "types": "./src/index.d.ts",
+        "default": "./src/node.mjs"
+      },
+      "types": "./src/browser.d.ts",
+      "default": "./src/browser.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "scripts"
+  ],
+  "engines": {
+    "node": ">=22.14"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prepack": "npm run build",
+    "pretest": "npm run build",
+    "test": "node --test test/*.test.mjs",
+    "test:browser": "node --test test-browser/browser.test.mjs"
+  },
+  "dependencies": {
+    "pyodide": "314.0.7"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "playwright-core": "1.65.0"
+  }
+}
