@@ -72,8 +72,7 @@ client.close();
 `client.closed` settles with an `Error` when the server connection drops or after `close()`.
 The browser cannot accept connections, so every connection goes out through the relay.
 Only peers reachable on their listening port can be downloaded from.
-Peers that cannot accept connections still send search results, because they connect back through the server and the client answers.
-The relay allows 16 connections. The client uses one for the server and at most 15 for peers.
+The relay allows 64 connections. Each client uses one for the server and at most 49 for peers.
 
 
 ## Build and test

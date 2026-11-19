@@ -18,8 +18,10 @@ from websockets.exceptions import ConnectionClosed
 
 SOULSEEK_HOST = "server.slsknet.org"
 SOULSEEK_PORT = 2242
+# Unreachable peers hold a connection until this expires.
+PEER_CONNECT_TIMEOUT = 5
 LISTEN_PORT = 8791
-MAX_CONNECTIONS = 16
+MAX_CONNECTIONS = 64
 CHUNK_SIZE = 64 * 1024
 PROTOCOL_ASSIGNMENTS = ipaddress.IPv4Network("192.0.0.0/24")
 
@@ -121,7 +123,9 @@ class Relay:
                 return
 
             try:
-                reader, writer = await asyncio.wait_for(connect_tcp(host, port), timeout=10)
+                reader, writer = await asyncio.wait_for(
+                    connect_tcp(host, port), timeout=10 if host == SOULSEEK_HOST else PEER_CONNECT_TIMEOUT
+                )
             except (OSError, TimeoutError, ValueError):
                 await websocket.close(1011, "TCP connection failed")
                 return

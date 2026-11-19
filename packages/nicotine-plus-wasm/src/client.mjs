@@ -4,6 +4,9 @@
 import { connectRelay, login } from './relay.mjs';
 
 const SERVER_CODE = { getPeerAddress: 3, connectToPeer: 18, relogged: 41 };
+// ServerPing has no payload: length 4, code 32
+const SERVER_PING = Uint8Array.of(4, 0, 0, 0, 32, 0, 0, 0);
+const PING_INTERVAL = 60000;
 const PEER_CODE = {
   fileSearchResponse: 9,
   transferRequest: 40,
@@ -119,15 +122,25 @@ function startClient({ protocol, server, relayURL, relayToken, username: self })
   const sessions = new Map();
   const peers = new Set();
   const addressWaiters = new Set();
-  // The relay allows 16 connections: the server, then 6 + 4 + 5 here
-  const slots = { incidental: createLimiter(6), session: createLimiter(4), file: createLimiter(5) };
+  // The relay allows 64 connections. A search brings hundreds of peer requests,
+  // so most slots go to search results. Leave room for a second client.
+  const slots = { incidental: createLimiter(40), session: createLimiter(4), file: createLimiter(5) };
   const closed = Promise.withResolvers();
   let failure;
   let nextSearchToken = Math.floor(Math.random() * 1e6);
 
+  const ping = setInterval(() => {
+    try {
+      server.send(SERVER_PING);
+    } catch {
+      // The receive loop reports the failure
+    }
+  }, PING_INTERVAL);
+
   function shutdown(error) {
     if (failure) return;
     failure = error;
+    clearInterval(ping);
     closed.resolve(error);
     for (const search of searches.values()) search.fail(error);
     for (const download of [...downloads]) download.fail(error);

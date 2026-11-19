@@ -143,6 +143,13 @@ async function beginDownload(client, server, options) {
   return { result, peer };
 }
 
+test('pings the server once a minute', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const { server } = await startClient(t);
+  t.mock.timers.tick(60000);
+  assert.deepEqual(await server.next(), frame(32));
+});
+
 test('connectClient from the package rejects a failed login with a LoginError', async () => {
   const server = network.endpoint('server');
   const connecting = connectClient({ relayURL: RELAY, relayToken: 'token', username: 'alice', password: 'bad' });
