@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Project516
 # SPDX-License-Identifier: AGPL-3.0-only
 
+import zlib
 from struct import Struct
 
 from pynicotine.slskmessages import CantConnectToPeer
@@ -31,6 +32,9 @@ from pynicotine.slskmessages import UploadFailed
 SERVER = (Struct("<II"), SERVER_MESSAGE_CODES, "server")
 PEER = (Struct("<II"), PEER_MESSAGE_CODES, "peer")
 PEER_INIT = (Struct("<IB"), PEER_INIT_MESSAGE_CODES, "peer init")
+# Upstream bounds decompression only after the username, at 128 MiB
+MAX_SEARCH_RESPONSE = 16 * 1024 * 1024
+MAX_USERNAME = 1024
 
 
 def _encode(message, family=SERVER):
@@ -118,7 +122,15 @@ def encode_peer_init(username, conn_type):
     return _encode(PeerInit(init_user=username, conn_type=conn_type), PEER_INIT)
 
 
+def _check_search_response(frame):
+    decompressor = zlib.decompressobj()
+    data = decompressor.decompress(bytes(frame.to_py()[PEER[0].size:]), MAX_SEARCH_RESPONSE)
+    if decompressor.unconsumed_tail or len(data) < 4 or int.from_bytes(data[:4], "little") > MAX_USERNAME:
+        raise ValueError("Search response is too large")
+
+
 def decode_file_search_response(frame, tokens):
+    _check_search_response(frame)
     response = FileSearchResponse()
     response.allowed_responses = set(tokens.to_py())
     _decode(response, frame, PEER)

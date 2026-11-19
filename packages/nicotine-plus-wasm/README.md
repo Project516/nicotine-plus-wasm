@@ -64,6 +64,7 @@ await client.search('artist album', { onResult: (result) => results.push(result)
 
 const { username: peer, files } = results[0];
 const blob = await client.download(peer, files[0].path, {
+  size: files[0].size,
   onProgress: (state) => console.log(state),
 });
 client.close();

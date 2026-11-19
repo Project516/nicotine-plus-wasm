@@ -81,6 +81,13 @@ test('decodes an indirect connection request and encodes the replies', async () 
   );
 });
 
+test('rejects search responses that decompress past the limits', async () => {
+  const longName = searchResponse({ username: 'x'.repeat(2000), token: 42, files: [] });
+  await assert.rejects(protocol.decodeFileSearchResponse(new Uint8Array(longName), [42]), /too large/);
+  const huge = searchResponse({ username: 'bob', token: 42, files: [{ path: 'a'.repeat(17 * 1024 * 1024), size: 1 }] });
+  await assert.rejects(protocol.decodeFileSearchResponse(new Uint8Array(huge), [42]), /too large/);
+});
+
 test('decodes a search response and skips tokens that are not ours', async () => {
   const response = searchResponse({
     username: 'bob',

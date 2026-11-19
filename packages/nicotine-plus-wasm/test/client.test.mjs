@@ -25,6 +25,10 @@ class Endpoint {
     else this.#frames.push(buffer);
   }
 
+  get queued() {
+    return this.#frames.length;
+  }
+
   next() {
     if (this.#frames.length) return Promise.resolve(this.#frames.shift());
     return new Promise((resolve, reject) => {
@@ -275,6 +279,42 @@ test('accepts a transfer request on the peer connection that the peer opened', a
   assert.deepEqual(await file.next(), uint64(0));
   file.send(Buffer.from('ok'));
   assert.equal(await (await result).text(), 'ok');
+});
+
+test('uses the search result size when the peer reports size 0', async (t) => {
+  const { client, server } = await startClient(t);
+  const { result, peer } = await beginDownload(client, server, { size: 5 });
+  peer.send(frame(40, uint32(1), uint32(6), string(PATH), uint64(0)));
+  assert.deepEqual(await peer.next(), frame(41, uint32(6), uint8(1)));
+  server.send(connectToPeer({ username: 'bob', type: 'F', address: '5.6.7.8', port: 2235, token: 323 }));
+  const file = network.endpoint('5.6.7.8:2235');
+  assert.deepEqual(await file.next(), initFrame(0, uint32(323)));
+  file.send(uint32(6));
+  assert.deepEqual(await file.next(), uint64(0));
+  file.send(Buffer.from('hello'));
+  assert.equal(await (await result).text(), 'hello');
+});
+
+test('fails a download the peer never answers after it drops the connection', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { client, server } = await startClient(t);
+  const { result, peer } = await beginDownload(client, server);
+  peer.socket.drop(1000, '');
+  for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(60000);
+  await assert.rejects(result, (error) => error instanceof DownloadError && /without answering/.test(error.reason));
+});
+
+test('does not connect when onProgress aborts the download while connecting', async (t) => {
+  const { client, server } = await startClient(t);
+  const controller = new AbortController();
+  const result = client.download('bob', PATH, {
+    signal: controller.signal,
+    onProgress: () => controller.abort(new Error('stop')),
+  });
+  await assert.rejects(result, /stop/);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(server.queued, 0);
 });
 
 test('rejects transfer requests for files that were not queued', async (t) => {

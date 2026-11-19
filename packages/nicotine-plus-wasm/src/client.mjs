@@ -22,6 +22,8 @@ const SESSION_SLOT_WAIT = 30000;
 const RESULT_IDLE = 10000;
 const SESSION_IDLE = 60000;
 const FILE_IDLE = 60000;
+// How long a peer that dropped our connection has to answer a queued download
+const ANSWER_TIMEOUT = 60000;
 // Some clients wait about 30 seconds before they open the file connection
 const FILE_CONNECT_TIMEOUT = 45000;
 
@@ -280,6 +282,7 @@ function startClient({ protocol, server, relayURL, relayToken, username: self })
       case PEER_CODE.placeInQueueResponse: {
         const { path, position } = await protocol.decodePlaceInQueueResponse(frame);
         const download = findDownload(username, path);
+        if (download) download.confirmed = true;
         if (download && download.token === undefined) download.notify({ state: 'queued', position });
         break;
       }
@@ -322,7 +325,9 @@ function startClient({ protocol, server, relayURL, relayToken, username: self })
       && (download.token === undefined || download.token === request.token);
     if (accept && download.token === undefined) {
       download.token = request.token;
-      download.size = request.size;
+      download.confirmed = true;
+      // SoulseekQt reports size 0 for files over 2 GiB
+      download.size = request.size || download.size;
       transfers.set(transferKey(username, request.token), download);
       download.timer = setTimeout(
         () => download.fail(new DownloadError('The peer did not open a file connection')),
@@ -443,6 +448,14 @@ function startClient({ protocol, server, relayURL, relayToken, username: self })
     peer.relay.send(await protocol.encodePeerInit(self, 'P'));
     servePeer(peer.relay, username, SESSION_IDLE, false).finally(() => {
       peer.close();
+      for (const download of session.downloads) {
+        if (download.confirmed || download.answerTimer) continue;
+        download.answerTimer = setTimeout(() => {
+          if (!download.confirmed) {
+            download.fail(new DownloadError('The peer closed the connection without answering the download request'));
+          }
+        }, ANSWER_TIMEOUT);
+      }
       if (sessions.get(username) === session) sessions.delete(username);
     });
     return peer.relay;
@@ -475,6 +488,7 @@ function startClient({ protocol, server, relayURL, relayToken, username: self })
 
   async function startDownload(download) {
     download.notify({ state: 'connecting' });
+    if (download.settled) return;
     const relay = await joinSession(download);
     const frames = [
       await protocol.encodeQueueUpload(download.path),
@@ -489,17 +503,18 @@ function startClient({ protocol, server, relayURL, relayToken, username: self })
     download.notify({ state: 'queued' });
   }
 
-  function download(username, path, { signal, onProgress } = {}) {
+  function download(username, path, { signal, onProgress, size = 0 } = {}) {
     if (failure) return Promise.reject(failure);
     if (signal?.aborted) return Promise.reject(signal.reason);
 
     const { promise, resolve, reject } = Promise.withResolvers();
-    const state = { username, path, size: 0, settled: false };
+    const state = { username, path, size, settled: false, confirmed: false };
     const onAbort = () => state.fail(signal.reason);
     const end = (settle, value) => {
       if (state.settled) return;
       state.settled = true;
       clearTimeout(state.timer);
+      clearTimeout(state.answerTimer);
       signal?.removeEventListener('abort', onAbort);
       downloads.delete(state);
       if (state.token !== undefined) transfers.delete(transferKey(username, state.token));

@@ -105,6 +105,8 @@ export interface Client {
   }): Promise<void>;
   download(username: string, path: string, options?: {
     signal?: AbortSignal;
+    /** The search result size. Used when the peer reports size 0, as SoulseekQt does for files over 2 GiB. */
+    size?: number;
     onProgress?: (progress: DownloadProgress) => void;
   }): Promise<Blob>;
   close(): void;
