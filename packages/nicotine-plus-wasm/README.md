@@ -53,7 +53,8 @@ export async function checkLogin(relayURL, relayToken, username, password, signa
 `connectClient` connects to the relay, logs in, and returns a client. It rejects with a `LoginError` (see `error.reason`) or a relay error.
 `search` calls `onResult` for each peer that answers and resolves when the timeout (20 seconds by default) ends.
 `download` resolves with a `Blob`. It rejects with a `DownloadError` when the peer denies or fails the upload, or cannot be reached.
-Both reject with the signal's reason when you abort.
+`browseFolder` resolves with the files directly in one folder of a peer's shares. Use it to get every track of an album, since search results list only the files that match the query. Pass a search result path without the file name.
+All three reject with the signal's reason when you abort.
 
 ```js
 import { connectClient } from '@project516/nicotine-plus-wasm';
@@ -67,6 +68,9 @@ const blob = await client.download(peer, files[0].path, {
   size: files[0].size,
   onProgress: (state) => console.log(state),
 });
+
+const folder = files[0].path.slice(0, files[0].path.lastIndexOf('\\'));
+const album = await client.browseFolder(peer, folder);
 client.close();
 ```
 

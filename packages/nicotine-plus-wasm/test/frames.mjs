@@ -66,6 +66,17 @@ export function searchResponse({ username, token, files, freeSlot = true, upload
   return frame(9, deflateSync(payload));
 }
 
+// Peer code 37: a folder and its subfolders, zlib-compressed
+export function folderContents({ token, folder, folders }) {
+  const payload = Buffer.concat([
+    uint32(token),
+    string(folder),
+    uint32(Object.keys(folders).length),
+    ...Object.entries(folders).flatMap(([name, files]) => [string(name), uint32(files.length), ...files.map(fileEntry)]),
+  ]);
+  return frame(37, deflateSync(payload));
+}
+
 export function connectToPeer({ username, type, address, port, token }) {
   return frame(
     18, string(username), string(type), ip(address), uint32(port), uint32(token),

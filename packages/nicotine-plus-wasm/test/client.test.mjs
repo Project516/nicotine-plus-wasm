@@ -6,7 +6,7 @@ import { after, before, beforeEach, test } from 'node:test';
 import { connectClient, createProtocol, DownloadError, LoginError } from '@project516/nicotine-plus-wasm';
 import { createClientConnector } from '../src/client.mjs';
 import {
-  connectToPeer, frame, initFrame, ip, searchResponse, string, uint8, uint32, uint64,
+  connectToPeer, folderContents, frame, initFrame, ip, searchResponse, string, uint8, uint32, uint64,
 } from './frames.mjs';
 
 const RELAY = 'wss://relay.test/relay';
@@ -122,9 +122,9 @@ before(async () => {
 after(() => protocol?.terminate());
 beforeEach(() => { network = new FakeNetwork(); });
 
-async function startClient(t) {
+async function startClient(t, connector = connect) {
   const server = network.endpoint('server');
-  const connecting = connect({ relayURL: RELAY, relayToken: 'token', username: 'alice', password: 'secret' });
+  const connecting = connector({ relayURL: RELAY, relayToken: 'token', username: 'alice', password: 'secret' });
   const login = await server.next();
   assert.equal(login.readUInt32LE(4), 1);
   server.send(LOGIN_OK);
@@ -315,6 +315,127 @@ test('does not connect when onProgress aborts the download while connecting', as
   await assert.rejects(result, /stop/);
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(server.queued, 0);
+});
+
+const FOLDER = '@@a\\Music';
+
+async function expectFolderRequest(peer) {
+  const request = await peer.next();
+  assert.equal(request.readUInt32LE(4), 36);
+  assert.equal(request.toString('utf8', 16), FOLDER);
+  return request.readUInt32LE(8);
+}
+
+test('lists the files directly in a peer folder', async (t) => {
+  const { client, server } = await startClient(t);
+  const listing = client.browseFolder('bob', FOLDER);
+  assert.deepEqual(await server.next(), frame(3, string('bob')));
+  server.send(BOB_ADDRESS);
+  const peer = network.endpoint('5.6.7.8:2234');
+  assert.deepEqual(await peer.next(), initFrame(1, string('alice'), string('P'), uint32(0)));
+  const token = await expectFolderRequest(peer);
+  peer.send(folderContents({
+    token,
+    folder: FOLDER,
+    folders: { [FOLDER]: [{ path: 'Song.MP3', size: 10, attributes: [[0, 256]] }], [`${FOLDER}\\Sub`]: [{ path: 'x.mp3', size: 1 }] },
+  }));
+  assert.deepEqual(await listing, [
+    { path: PATH, name: 'Song.MP3', extension: 'mp3', size: 10, bitrate: 256 },
+  ]);
+  await until(() => peer.socket.closed);
+});
+
+test('lists a folder over the connection an active download uses', async (t) => {
+  const { client, server } = await startClient(t);
+  const { peer } = await beginDownload(client, server);
+  const listing = client.browseFolder('bob', FOLDER);
+  const token = await expectFolderRequest(peer);
+  assert.equal(network.endpoint('5.6.7.8:2234').sockets.length, 1);
+  peer.send(folderContents({ token, folder: FOLDER, folders: { [FOLDER]: [] } }));
+  assert.deepEqual(await listing, []);
+  assert.equal(peer.socket.closed, false);
+});
+
+test('retries an empty listing of a non-ASCII folder with a latin-1 request', async (t) => {
+  const { client, server } = await startClient(t);
+  const folder = 'Music\\Björk';
+  const listing = client.browseFolder('bob', folder);
+  assert.deepEqual(await server.next(), frame(3, string('bob')));
+  server.send(BOB_ADDRESS);
+  const peer = network.endpoint('5.6.7.8:2234');
+  await peer.next();
+  const first = await peer.next();
+  assert.equal(first.toString('utf8', 16), folder);
+  peer.send(folderContents({ token: first.readUInt32LE(8), folder, folders: {} }));
+  const legacy = await peer.next();
+  assert.equal(legacy.readUInt32LE(4), 36);
+  assert.deepEqual(legacy.subarray(12), Buffer.concat([uint32(11), Buffer.from(folder, 'latin1')]));
+  peer.send(folderContents({ token: legacy.readUInt32LE(8), folder, folders: { [folder]: [{ path: 'a.mp3', size: 3 }] } }));
+  assert.deepEqual(await listing, [{ path: `${folder}\\a.mp3`, name: 'a.mp3', extension: 'mp3', size: 3 }]);
+});
+
+test('does not send a folder request when the listing aborts during encoding', async (t) => {
+  const controller = new AbortController();
+  const connector = createClientConnector(async () => ({
+    ...protocol,
+    async encodeFolderContentsRequest(...args) {
+      const frame = await protocol.encodeFolderContentsRequest(...args);
+      controller.abort(new Error('stop'));
+      return frame;
+    },
+    terminate() {},
+  }));
+  const { client, server } = await startClient(t, connector);
+  const listing = client.browseFolder('bob', FOLDER, { signal: controller.signal });
+  assert.deepEqual(await server.next(), frame(3, string('bob')));
+  server.send(BOB_ADDRESS);
+  const peer = network.endpoint('5.6.7.8:2234');
+  await peer.next();
+  await assert.rejects(listing, /stop/);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(peer.queued, 0);
+});
+
+test('rejects an aborted folder listing without waiting for the encoder', { timeout: 5000 }, async (t) => {
+  const controller = new AbortController();
+  const encoding = Promise.withResolvers();
+  const encoder = Promise.withResolvers();
+  const connector = createClientConnector(async () => ({
+    ...protocol,
+    async encodeFolderContentsRequest(...args) {
+      encoding.resolve();
+      await encoder.promise;
+      return protocol.encodeFolderContentsRequest(...args);
+    },
+    terminate() {},
+  }));
+  const { client, server } = await startClient(t, connector);
+  const listing = client.browseFolder('bob', FOLDER, { signal: controller.signal });
+  assert.deepEqual(await server.next(), frame(3, string('bob')));
+  server.send(BOB_ADDRESS);
+  const peer = network.endpoint('5.6.7.8:2234');
+  await peer.next();
+  await encoding.promise;
+  controller.abort(new Error('stop'));
+  await assert.rejects(listing, /stop/);
+  await until(() => peer.socket.closed);
+  encoder.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(peer.queued, 0);
+});
+
+test('rejects a folder listing the peer does not answer', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { client, server } = await startClient(t);
+  const listing = client.browseFolder('bob', FOLDER, { timeout: 1000 });
+  listing.catch(() => {});
+  assert.deepEqual(await server.next(), frame(3, string('bob')));
+  server.send(BOB_ADDRESS);
+  const peer = network.endpoint('5.6.7.8:2234');
+  await peer.next();
+  await expectFolderRequest(peer);
+  t.mock.timers.tick(1000);
+  await assert.rejects(listing, (error) => error instanceof DownloadError && /in time/.test(error.reason));
 });
 
 test('rejects transfer requests for files that were not queued', async (t) => {

@@ -11,6 +11,8 @@ from pynicotine.slskmessages import FileOffset
 from pynicotine.slskmessages import FileSearch
 from pynicotine.slskmessages import FileSearchResponse
 from pynicotine.slskmessages import FileTransferInit
+from pynicotine.slskmessages import FolderContentsRequest
+from pynicotine.slskmessages import FolderContentsResponse
 from pynicotine.slskmessages import GetPeerAddress
 from pynicotine.slskmessages import Login
 from pynicotine.slskmessages import PEER_INIT_MESSAGE_CODES
@@ -32,9 +34,10 @@ from pynicotine.slskmessages import UploadFailed
 SERVER = (Struct("<II"), SERVER_MESSAGE_CODES, "server")
 PEER = (Struct("<II"), PEER_MESSAGE_CODES, "peer")
 PEER_INIT = (Struct("<IB"), PEER_INIT_MESSAGE_CODES, "peer init")
-# Upstream bounds decompression only after the username, at 128 MiB
-MAX_SEARCH_RESPONSE = 16 * 1024 * 1024
+# Upstream bounds decompression only after the first string, at 128 MiB
+MAX_COMPRESSED_RESPONSE = 16 * 1024 * 1024
 MAX_USERNAME = 1024
+MAX_FOLDER = 4096
 
 
 def _encode(message, family=SERVER):
@@ -122,15 +125,26 @@ def encode_peer_init(username, conn_type):
     return _encode(PeerInit(init_user=username, conn_type=conn_type), PEER_INIT)
 
 
-def _check_search_response(frame):
+def _check_compressed(frame, string_offset, max_string):
     decompressor = zlib.decompressobj()
-    data = decompressor.decompress(bytes(frame.to_py()[PEER[0].size:]), MAX_SEARCH_RESPONSE)
-    if decompressor.unconsumed_tail or len(data) < 4 or int.from_bytes(data[:4], "little") > MAX_USERNAME:
-        raise ValueError("Search response is too large")
+    data = decompressor.decompress(bytes(frame.to_py()[PEER[0].size:]), MAX_COMPRESSED_RESPONSE)
+    end = string_offset + 4
+    if decompressor.unconsumed_tail or len(data) < end or int.from_bytes(data[string_offset:end], "little") > max_string:
+        raise ValueError("Response is too large")
+
+
+def _file(path, size, attributes):
+    bitrate, duration, *_rest = FileListMessage.parse_file_attributes(attributes)
+    file = {"path": path, "size": size}
+    if bitrate is not None:
+        file["bitrate"] = bitrate
+    if duration is not None:
+        file["duration"] = duration
+    return file
 
 
 def decode_file_search_response(frame, tokens):
-    _check_search_response(frame)
+    _check_compressed(frame, 0, MAX_USERNAME)
     response = FileSearchResponse()
     response.allowed_responses = set(tokens.to_py())
     _decode(response, frame, PEER)
@@ -139,15 +153,10 @@ def decode_file_search_response(frame, tokens):
     if response.list is None:
         return {"token": response.token, "files": None}
 
-    files = []
-    for _code, path, size, _ext, attributes in response.list + (response.privatelist or []):
-        bitrate, duration, *_rest = FileListMessage.parse_file_attributes(attributes)
-        file = {"path": path, "size": size}
-        if bitrate is not None:
-            file["bitrate"] = bitrate
-        if duration is not None:
-            file["duration"] = duration
-        files.append(file)
+    files = [
+        _file(path, size, attributes)
+        for _code, path, size, _ext, attributes in response.list + (response.privatelist or [])
+    ]
 
     return {
         "token": response.token,
@@ -155,6 +164,29 @@ def decode_file_search_response(frame, tokens):
         "freeSlot": response.freeulslots,
         "uploadSpeed": response.ulspeed,
         "queueLength": response.inqueue,
+    }
+
+
+def encode_folder_contents_request(token, folder, legacy=False):
+    return _encode(FolderContentsRequest(folder, token, legacy_client=legacy), PEER)
+
+
+def decode_folder_contents_response(frame, username, folders):
+    _check_compressed(frame, 4, MAX_FOLDER)
+    response = FolderContentsResponse()
+    response.username = username
+    response.allowed_responses = {username + folder for folder in folders.to_py()}
+    _decode(response, frame, PEER)
+
+    # Upstream leaves the list empty when the folder was not requested
+    if response.list is None:
+        return {"folder": response.dir, "files": None}
+
+    # The response also lists subfolders, which upstream skips too
+    files = response.list.get(response.dir, [])
+    return {
+        "folder": response.dir,
+        "files": [_file(f"{response.dir}\\{name}", size, attributes) for _code, name, size, _ext, attributes in files],
     }
 
 
