@@ -122,9 +122,9 @@ before(async () => {
 after(() => protocol?.terminate());
 beforeEach(() => { network = new FakeNetwork(); });
 
-async function startClient(t) {
+async function startClient(t, connector = connect) {
   const server = network.endpoint('server');
-  const connecting = connect({ relayURL: RELAY, relayToken: 'token', username: 'alice', password: 'secret' });
+  const connecting = connector({ relayURL: RELAY, relayToken: 'token', username: 'alice', password: 'secret' });
   const login = await server.next();
   assert.equal(login.readUInt32LE(4), 1);
   server.send(LOGIN_OK);
@@ -372,6 +372,28 @@ test('retries an empty listing of a non-ASCII folder with a latin-1 request', as
   assert.deepEqual(legacy.subarray(12), Buffer.concat([uint32(11), Buffer.from(folder, 'latin1')]));
   peer.send(folderContents({ token: legacy.readUInt32LE(8), folder, folders: { [folder]: [{ path: 'a.mp3', size: 3 }] } }));
   assert.deepEqual(await listing, [{ path: `${folder}\\a.mp3`, name: 'a.mp3', extension: 'mp3', size: 3 }]);
+});
+
+test('does not send a folder request when the listing aborts during encoding', async (t) => {
+  const controller = new AbortController();
+  const connector = createClientConnector(async () => ({
+    ...protocol,
+    async encodeFolderContentsRequest(...args) {
+      const frame = await protocol.encodeFolderContentsRequest(...args);
+      controller.abort(new Error('stop'));
+      return frame;
+    },
+    terminate() {},
+  }));
+  const { client, server } = await startClient(t, connector);
+  const listing = client.browseFolder('bob', FOLDER, { signal: controller.signal });
+  assert.deepEqual(await server.next(), frame(3, string('bob')));
+  server.send(BOB_ADDRESS);
+  const peer = network.endpoint('5.6.7.8:2234');
+  await peer.next();
+  await assert.rejects(listing, /stop/);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(peer.queued, 0);
 });
 
 test('rejects a folder listing the peer does not answer', async (t) => {

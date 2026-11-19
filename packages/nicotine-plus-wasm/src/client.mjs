@@ -597,19 +597,32 @@ function startClient({ protocol, server, relayURL, relayToken, username: self })
     if (browses.has(key)) throw new DownloadError('This folder is already being listed');
     const { promise, resolve, reject } = Promise.withResolvers();
     promise.catch(() => {}); // A rejection can land before the await below
+    let settled = false;
     // Has its own timeout, so it needs no answer timer when the session drops
-    const browse = { username, folder, confirmed: true, finish: resolve, fail: reject };
+    const browse = {
+      username,
+      folder,
+      confirmed: true,
+      finish(files) { settled = true; resolve(files); },
+      fail(error) { settled = true; reject(error); },
+    };
     browses.set(key, browse);
-    const timer = setTimeout(() => reject(new DownloadError('The peer did not list the folder in time')), timeout);
-    const onAbort = () => reject(signal.reason);
+    const timer = setTimeout(() => browse.fail(new DownloadError('The peer did not list the folder in time')), timeout);
+    const onAbort = () => browse.fail(signal.reason);
     signal?.addEventListener('abort', onAbort, { once: true });
     try {
-      browse.relay = await Promise.race([joinSession(browse), promise]);
-      const frame = await Promise.race([protocol.encodeFolderContentsRequest(nextBrowseToken++, folder), promise]);
-      try {
-        browse.relay.send(frame);
-      } catch {
-        throw new DownloadError('The peer connection closed before the folder was requested');
+      // The listing can settle at any await, through abort, timeout, or a response
+      const relay = await Promise.race([joinSession(browse), promise]);
+      if (!settled) {
+        browse.relay = relay;
+        const frame = await protocol.encodeFolderContentsRequest(nextBrowseToken++, folder);
+        if (!settled) {
+          try {
+            relay.send(frame);
+          } catch {
+            throw new DownloadError('The peer connection closed before the folder was requested');
+          }
+        }
       }
       return await promise;
     } finally {
